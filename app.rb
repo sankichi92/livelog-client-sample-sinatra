@@ -10,6 +10,7 @@ AUTHORIZATION_ENDPOINT = 'https://patient-bar-7812.auth0.com/authorize'
 TOKEN_ENDPOINT = 'https://patient-bar-7812.auth0.com/oauth/token'
 
 AUDIENCE = 'https://livelog.ku-unplugged.net/api/'
+GRAPHQL_ENDPOINT = 'https://livelog.ku-unplugged.net/api/graphql'
 
 # TODO: Replace CLIENT_ID and CLIENT_SECRET values.
 CLIENT_ID = 'YOUR_CLIENT_ID'
@@ -29,10 +30,9 @@ template :index do
         <dl>
           <dt>Access Token</dt>
           <dd><%= session[:access_token] %></dd>
-          <dt>Refresh Token</dt>
-          <dd><%= session[:refresh_token] %></dd>
         </dl>
         <a href="/authorize">Get access token</a>
+        <a href="/live_albums">Get live album urls</a>
       </body>
     </html>
   HTML
@@ -51,7 +51,7 @@ get '/authorize' do
     response_type: 'code',
     client_id: CLIENT_ID,
     redirect_uri: CALLBACK_URL,
-    scope: 'offline_access read:lives',
+    scope: 'read:lives',
     state: session[:state]
   )
 
@@ -80,7 +80,42 @@ get '/callback' do
   logger.info response.body
   parsed_body = JSON.parse(response.body)
   session[:access_token] = parsed_body['access_token']
-  session[:refresh_token] = parsed_body['refresh_token'] if parsed_body['refresh_token']
 
   redirect to('/')
+end
+
+get '/live_albums' do
+  graphql_query = <<~GRAPHQL
+    query {
+      lives {
+        nodes {
+          albumUrl
+        }
+      }
+    }
+  GRAPHQL
+
+  uri = URI.parse(GRAPHQL_ENDPOINT)
+  http = Net::HTTP.new(uri.host, uri.port)
+  http.use_ssl = true
+
+  response = http.post(
+    uri.path,
+    build_query(query: graphql_query),
+    { 'Authorization' => "Bearer #{session[:access_token]}" }
+  )
+  logger.info response.body
+
+  case response
+  when Net::HTTPSuccess
+    parsed_body = JSON.parse(response.body)
+    if parsed_body['errors']
+      halt parsed_body['errors'].to_s
+    else
+      album_urls = parsed_body['data']['lives']['nodes'].map { |live| live['albumUrl'] }.compact
+      halt album_urls.join(', ')
+    end
+  else
+    halt "Unable to fetch live albums: #{response.code} #{response.message}"
+  end
 end
